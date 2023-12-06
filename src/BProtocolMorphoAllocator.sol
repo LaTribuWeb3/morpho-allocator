@@ -26,13 +26,14 @@ marketid: 0xbc6d1789e6ba66e5cd277af475c5ed77fcf8b084347809d9d92e400ebacbdd10
 */
 
 contract BProtocolMorphoAllocator {
-  using RiskyMath for uint256;
   using MorphoLib for MarketParams;
 
   ISPythia immutable SPYTHIA;
   address immutable TRUSTED_RELAYER;
   address immutable METAMORPHO_VAULT;
   uint256 immutable MIN_CLF = 3;
+
+  error INVALID_NUMBER_OF_RISK_DATA(uint256 a);
 
   constructor(ISPythia spythia, address relayer, address morphoVault) {
     SPYTHIA = spythia;
@@ -41,14 +42,14 @@ contract BProtocolMorphoAllocator {
   }
 
   function checkAndReallocate(
-    MarketAllocation[] memory allocations,
-    RiskData[] memory riskDatas,
-    Signature[] memory signatures
-  ) public {
-    require(
-      allocations.length == riskDatas.length,
-      "Invalid number of risk data"
-    );
+    MarketAllocation[] calldata allocations,
+    RiskData[] calldata riskDatas,
+    Signature[] calldata signatures
+  ) external {
+    if(allocations.length != riskDatas.length) {
+        revert INVALID_NUMBER_OF_RISK_DATA(250);
+    }
+
     require(
       riskDatas.length == signatures.length,
       "Invalid number of signatures"
@@ -85,6 +86,12 @@ contract BProtocolMorphoAllocator {
     );
     require(signer == TRUSTED_RELAYER, "invalid signer");
 
+    // timeout
+    require(riskData.lastUpdate + 1 days >= block.timestamp, "timeout");
+
+    // chain id
+    require(riskData.chainId == block.chainid, "invalid chainId");
+
     // get market config from the vault
     Id marketId = allocation.marketParams.id();
     (uint184 cap, , ) = IMetaMorpho(METAMORPHO_VAULT).config(marketId);
@@ -96,10 +103,10 @@ contract BProtocolMorphoAllocator {
 
     // LTV  = e ^ (-c * sigma / sqrt(l/d)) - beta
     uint256 cTimesSigma = (MIN_CLF * sigma) / 1e18;
-    uint256 sqrtValue = ((1e18 * l) / d).sqrt() * 1e9;
+    uint256 sqrtValue = RiskyMath.sqrt((1e18 * l) / d) * 1e9;
     uint256 mantissa = ((1 << 59) * cTimesSigma) / sqrtValue;
 
-    uint256 expResult = mantissa.generalExp(59);
+    uint256 expResult = RiskyMath.generalExp(mantissa, 59);
 
     uint256 recommendedLtv = (1e18 * (1 << 59)) / expResult - beta;
 
