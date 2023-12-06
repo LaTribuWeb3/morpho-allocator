@@ -17,6 +17,10 @@ struct Signature {
 }
 
 interface ISPythia {
-
-    function getSigner(RiskData memory data, uint8 v, bytes32 r, bytes32 s) external returns(address);
+    function getSigner(
+        RiskData memory data,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external returns (address);
 }

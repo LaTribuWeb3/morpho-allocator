@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.2 <0.9.0;
 
-    
 struct MarketAllocation {
     /// @notice The market to allocate.
     MarketParams marketParams;
@@ -20,8 +19,9 @@ struct MarketParams {
 type Id is bytes32;
 
 interface IMetaMorpho {
-
-    function config(Id) external view returns (uint184 cap, bool enabled, uint64 removableAt);
+    function config(
+        Id
+    ) external view returns (uint184 cap, bool enabled, uint64 removableAt);
 
     function reallocate(MarketAllocation[] calldata allocations) external;
 }
