@@ -26,87 +26,87 @@ marketid: 0xbc6d1789e6ba66e5cd277af475c5ed77fcf8b084347809d9d92e400ebacbdd10
 */
 
 contract BProtocolMorphoAllocator {
-    using RiskyMath for uint256;
-    using MorphoLib for MarketParams;
+  using RiskyMath for uint256;
+  using MorphoLib for MarketParams;
 
-    ISPythia immutable SPYTHIA;
-    address immutable TRUSTED_RELAYER;
-    address immutable METAMORPHO_VAULT;
-    uint256 immutable MIN_CLF = 3;
+  ISPythia immutable SPYTHIA;
+  address immutable TRUSTED_RELAYER;
+  address immutable METAMORPHO_VAULT;
+  uint256 immutable MIN_CLF = 3;
 
-    constructor(ISPythia spythia, address relayer, address morphoVault) {
-        SPYTHIA = spythia;
-        TRUSTED_RELAYER = relayer;
-        METAMORPHO_VAULT = morphoVault;
+  constructor(ISPythia spythia, address relayer, address morphoVault) {
+    SPYTHIA = spythia;
+    TRUSTED_RELAYER = relayer;
+    METAMORPHO_VAULT = morphoVault;
+  }
+
+  function checkAndReallocate(
+    MarketAllocation[] memory allocations,
+    RiskData[] memory riskDatas,
+    Signature[] memory signatures
+  ) public {
+    require(
+      allocations.length == riskDatas.length,
+      "Invalid number of risk data"
+    );
+    require(
+      riskDatas.length == signatures.length,
+      "Invalid number of signatures"
+    );
+
+    for (uint256 i = 0; i < allocations.length; i++) {
+      _checkAllocationRisk(allocations[i], riskDatas[i], signatures[i]);
     }
 
-    function checkAndReallocate(
-        MarketAllocation[] memory allocations,
-        RiskData[] memory riskDatas,
-        Signature[] memory signatures
-    ) public {
-        require(
-            allocations.length == riskDatas.length,
-            "Invalid number of risk data"
-        );
-        require(
-            riskDatas.length == signatures.length,
-            "Invalid number of signatures"
-        );
+    // call reallocate
+    IMetaMorpho(METAMORPHO_VAULT).reallocate(allocations);
+  }
 
-        for (uint256 i = 0; i < allocations.length; i++) {
-            _checkAllocationRisk(allocations[i], riskDatas[i], signatures[i]);
-        }
+  function _checkAllocationRisk(
+    MarketAllocation memory allocation,
+    RiskData memory riskData,
+    Signature memory signature
+  ) private {
+    require(
+      allocation.marketParams.collateralToken == riskData.collateralAsset,
+      "Allocation collateral token != riskData.collateralAsset"
+    );
+    require(
+      allocation.marketParams.loanToken == riskData.debtAsset,
+      "allocation.loanToken != riskData.debtAsset"
+    );
 
-        // call reallocate
-        IMetaMorpho(METAMORPHO_VAULT).reallocate(allocations);
-    }
+    // Verify if the signature comes from the trusted relayer
+    address signer = SPYTHIA.getSigner(
+      riskData,
+      signature.v,
+      signature.r,
+      signature.s
+    );
+    require(signer == TRUSTED_RELAYER, "invalid signer");
 
-    function _checkAllocationRisk(
-        MarketAllocation memory allocation,
-        RiskData memory riskData,
-        Signature memory signature
-    ) private {
-        require(
-            allocation.marketParams.collateralToken == riskData.collateralAsset,
-            "Allocation collateral token != riskData.collateralAsset"
-        );
-        require(
-            allocation.marketParams.loanToken == riskData.debtAsset,
-            "allocation.loanToken != riskData.debtAsset"
-        );
+    // get market config from the vault
+    Id marketId = allocation.marketParams.id();
+    (uint184 cap, , ) = IMetaMorpho(METAMORPHO_VAULT).config(marketId);
 
-        // Verify if the signature comes from the trusted relayer
-        address signer = SPYTHIA.getSigner(
-            riskData,
-            signature.v,
-            signature.r,
-            signature.s
-        );
-        require(signer == TRUSTED_RELAYER, "invalid signer");
+    uint256 sigma = riskData.volatility;
+    uint256 l = riskData.liquidity;
+    uint256 d = cap; // supplyCap
+    uint256 beta = 15487; // liquidation bonus
 
-        // get market config from the vault
-        Id marketId = allocation.marketParams.id();
-        (uint184 cap, , ) = IMetaMorpho(METAMORPHO_VAULT).config(marketId);
+    // LTV  = e ^ (-c * sigma / sqrt(l/d)) - beta
+    uint256 cTimesSigma = (MIN_CLF * sigma) / 1e18;
+    uint256 sqrtValue = ((1e18 * l) / d).sqrt() * 1e9;
+    uint256 mantissa = ((1 << 59) * cTimesSigma) / sqrtValue;
 
-        uint256 sigma = riskData.volatility;
-        uint256 l = riskData.liquidity;
-        uint256 d = cap; // supplyCap
-        uint256 beta = 15487; // liquidation bonus
+    uint256 expResult = mantissa.generalExp(59);
 
-        // LTV  = e ^ (-c * sigma / sqrt(l/d)) - beta
-        uint256 cTimesSigma = (MIN_CLF * sigma) / 1e18;
-        uint256 sqrtValue = ((1e18 * l) / d).sqrt() * 1e9;
-        uint256 mantissa = ((1 << 59) * cTimesSigma) / sqrtValue;
+    uint256 recommendedLtv = (1e18 * (1 << 59)) / expResult - beta;
 
-        uint256 expResult = mantissa.generalExp(59);
-
-        uint256 recommendedLtv = (1e18 * (1 << 59)) / expResult - beta;
-
-        // check if the current ltv is lower or equal to the recommended ltv
-        require(
-            recommendedLtv >= allocation.marketParams.lltv,
-            "recommended ltv is lower than current lltv"
-        );
-    }
+    // check if the current ltv is lower or equal to the recommended ltv
+    require(
+      recommendedLtv >= allocation.marketParams.lltv,
+      "recommended ltv is lower than current lltv"
+    );
+  }
 }
